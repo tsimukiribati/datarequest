@@ -493,7 +493,8 @@ function send(){
     $('doneRef').textContent = r.ref; $('doneCode').textContent = r.code;
     $('tRef').value = r.ref; $('tCode').value = r.code;
     keep('drq_done', JSON.stringify({ ref: r.ref, code: r.code })); keep('drq_trk', JSON.stringify({ ref: r.ref, code: r.code }));
-    clearRequest(); show('done'); homeThen({ s: 'done' }); drawMe();
+    RID += 1; keep('drq_rid', String(RID));
+    clearRequest(); swap({ s: 'done' }); drawMe();
   }).catch(function(e){
     var m = String(e && e.message || '');
     fail('formErr', (/Please|must|large|limit/.test(m) ? m : 'We could not send your request. Please check your internet and press Send my request again.') + ' Your answers are still here.');
@@ -536,28 +537,35 @@ function doReply(){
 /* ---------- Browser Back button and refresh ----------
    Every screen is saved in the browser history, so the browser's or phone's Back button
    goes to the previous screen instead of leaving the page. A refresh keeps the person on
-   the same screen, with their answers. Answers stay only in this browser tab. */
-var cur = { s: 'home', d: 0 }, pending = null, lostFile = '';
+   the same screen, with their answers. Answers stay only in this browser tab.
+   New history entries are made only when the person clicks, because Chrome skips
+   entries a page adds by itself. Questions from a request already sent are marked
+   with an older RID, so Back jumps over them to the home screen. */
+var cur = { s: 'home', d: 0 }, lostFile = '';
+var RID = Number(kept('drq_rid')) || 1;
 function keep(k, v){ try { if (v) sessionStorage.setItem(k, v); else sessionStorage.removeItem(k); } catch (e) {} }
 function kept(k){ try { return sessionStorage.getItem(k) || ''; } catch (e) { return ''; } }
 function keptJSON(k){ try { return JSON.parse(kept(k) || 'null'); } catch (e) { return null; } }
 function addr(st){ return st.s === 'home' ? location.pathname + location.search : '#' + (st.s === 'form' ? 'step' + st.n : st.s); }
 function render(st){
-  if (st.s === 'signin' && TOKEN && SIGNIN) { st = { s: 'form', n: step || 1, d: st.d }; history.replaceState(st, '', addr(st)); }
+  if (st.s === 'signin' && TOKEN && SIGNIN) { st = { s: 'form', n: step || 1, d: st.d, r: RID }; history.replaceState(st, '', addr(st)); }
   if (st.s === 'done' && !$('doneRef').textContent) { st = { s: 'home', d: st.d }; history.replaceState(st, '', addr(st)); }
   cur = st;
   if (st.s === 'form') { show('form'); showStep(st.n); }
   else if (st.s === 'signin') { var to = kept('drq_sto'); if (to) $('sTo').textContent = to; show('signin'); signStage(!!to); }
   else show(st.s);
 }
-function push(st){ st.d = cur.d + 1; history.pushState(st, '', addr(st)); render(st); }
-function swap(st){ st.d = cur.d; history.replaceState(st, '', addr(st)); render(st); }
+function mark(st){ if (st.s === 'form') st.r = RID; return st; }
+function push(st){ mark(st); st.d = cur.d + 1; history.pushState(st, '', addr(st)); render(st); }
+function swap(st){ mark(st); st.d = cur.d; history.replaceState(st, '', addr(st)); render(st); }
 function goHome(){ if (cur.d > 0) history.go(-cur.d); else swap({ s: 'home' }); }
-function homeThen(st){ if (cur.d > 0) { pending = st; history.go(-cur.d); } else push(st); }
+function stale(st){ return st.s === 'form' && st.r !== RID; }
 window.addEventListener('popstate', function(e){
   var st = (e.state && e.state.s) ? e.state : { s: 'home', d: 0 };
-  if (pending) { var p = pending; pending = null; cur = st; push(p); return; }
-  if (sending) { history.pushState(cur, '', addr(cur)); return; }
+  if (stale(st)) {
+    if (st.d > 0) { history.go(-st.d); return; }
+    st = { s: 'home', d: 0 }; history.replaceState(st, '', addr(st));
+  }
   render(st);
 });
 
@@ -616,7 +624,8 @@ restoreDraft();
   if (trk) { $('tRef').value = trk.ref; $('tCode').value = trk.code; }
   var st = history.state && history.state.s ? history.state : null;
   if (!st || !SCRIPT_URL) { cur = { s: 'home', d: 0 }; history.replaceState(cur, '', addr(cur)); return; }
-  if (st.s === 'form' && SIGNIN && !TOKEN) st = { s: 'signin', d: st.d };
+  if (stale(st)) st = { s: 'home', d: st.d };
+  else if (st.s === 'form' && SIGNIN && !TOKEN) st = { s: 'signin', d: st.d };
   history.replaceState(st, '', addr(st)); render(st);
   if (st.s === 'track' && val('tRef') && val('tCode')) doTrack();
 })();
