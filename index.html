@@ -242,7 +242,7 @@
     <label class="q">Will the data be published or shared outside your organisation?</label>
     <div class="opts" id="pubOpts"></div>
     <label class="q" for="fFile">Supporting letter <small>(optional. A request letter or research approval, as a PDF, Word file or photo, up to 3 MB)</small></label>
-    <input type="file" id="fFile" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png">
+    <input type="file" id="fFile" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"><p class="hint hide" id="fileLost" style="color:#6d1b0c;font-weight:600"></p>
   </div>
 
   <div class="step" data-step="6">
@@ -467,7 +467,7 @@ function askCode(){
   fail('signErr', ''); $('btnCode').disabled = true; $('btnCode').textContent = 'Sending. Please wait';
   post({ action:'code', email: email }).then(function(r){
     if (!r || !r.ok) throw new Error((r && r.error) || '');
-    $('sTo').textContent = email; $('sCode').value = ''; signStage(true); $('sCode').focus();
+    $('sTo').textContent = email; $('sCode').value = ''; keep('drq_sto', email); signStage(true); $('sCode').focus();
   }).catch(function(e){ fail('signErr', (e && e.message && !/fetch|network/i.test(e.message)) ? e.message : 'We could not send the code. Please check your internet and try again.'); })
   .then(function(){ $('btnCode').disabled = false; $('btnCode').textContent = 'Send me a code'; });
 }
@@ -477,7 +477,7 @@ function checkCode(){
   fail('signErr', ''); $('btnVerify').disabled = true; $('btnVerify').textContent = 'Checking. Please wait';
   post({ action:'verify', email: $('sTo').textContent, code: code }).then(function(r){
     if (!r || !r.ok) throw new Error((r && r.error) || '');
-    setSession(r.token, r.email); signStage(false); show('form'); showStep(step);
+    setSession(r.token, r.email); keep('drq_sto', ''); swap({ s: 'form', n: step });
   }).catch(function(e){ fail('signErr', (e && e.message && !/fetch|network/i.test(e.message)) ? e.message : 'We could not check the code. Please check your internet and try again.'); })
   .then(function(){ $('btnVerify').disabled = false; $('btnVerify').textContent = 'Sign in'; });
 }
@@ -488,11 +488,12 @@ function send(){
   var payload = collect(); payload.token = TOKEN;
   readFile($('fFile').files[0]).then(function(f){ if (f) payload.file = f; return post(payload); })
   .then(function(r){
-    if (r && r.signin) { setSession('', ''); show('signin'); fail('signErr', 'Your sign in has ended. Please sign in again. Your answers are still here.'); return; }
+    if (r && r.signin) { setSession('', ''); keep('drq_sto', ''); swap({ s: 'signin' }); fail('signErr', 'Your sign in has ended. Please sign in again. Your answers are still here.'); return; }
     if (!r || !r.ok) throw new Error((r && r.error) || 'Could not send.');
     $('doneRef').textContent = r.ref; $('doneCode').textContent = r.code;
     $('tRef').value = r.ref; $('tCode').value = r.code;
-    show('done'); drawMe();
+    keep('drq_done', JSON.stringify({ ref: r.ref, code: r.code })); keep('drq_trk', JSON.stringify({ ref: r.ref, code: r.code }));
+    clearRequest(); show('done'); homeThen({ s: 'done' }); drawMe();
   }).catch(function(e){
     var m = String(e && e.message || '');
     fail('formErr', (/Please|must|large|limit/.test(m) ? m : 'We could not send your request. Please check your internet and press Send my request again.') + ' Your answers are still here.');
@@ -502,7 +503,7 @@ function send(){
 function doTrack(){
   var ref = val('tRef').toUpperCase(), code = val('tCode');
   if (!ref || !code) return fail('trackErr', 'Please type both the reference number and the tracking code.');
-  fail('trackErr', ''); $('btnTrack').disabled = true; $('btnTrack').textContent = 'Checking. Please wait';
+  fail('trackErr', ''); keep('drq_trk', JSON.stringify({ ref: ref, code: code })); $('btnTrack').disabled = true; $('btnTrack').textContent = 'Checking. Please wait';
   get('api=track&ref=' + encodeURIComponent(ref) + '&code=' + encodeURIComponent(code)).then(function(r){
     if (!r || !r.ok) { $('trackOut').classList.add('hide'); return fail('trackErr', (r && r.error) || 'We could not find that request.'); }
     $('trRef').textContent = r.ref + (r.received ? '  ·  received ' + r.received : '');
@@ -532,23 +533,93 @@ function doReply(){
   }).catch(function(e){ fail('replyErr', (e && e.message) || 'We could not send your answer. Please try again.'); $('btnReply').disabled = false; $('btnReply').textContent = 'Send my answer'; });
 }
 
-$('goMake').onclick = function(){ step = 1; if (SIGNIN && !TOKEN) { signStage(false); show('signin'); } else { show('form'); showStep(1); } };
+/* ---------- Browser Back button and refresh ----------
+   Every screen is saved in the browser history, so the browser's or phone's Back button
+   goes to the previous screen instead of leaving the page. A refresh keeps the person on
+   the same screen, with their answers. Answers stay only in this browser tab. */
+var cur = { s: 'home', d: 0 }, pending = null, lostFile = '';
+function keep(k, v){ try { if (v) sessionStorage.setItem(k, v); else sessionStorage.removeItem(k); } catch (e) {} }
+function kept(k){ try { return sessionStorage.getItem(k) || ''; } catch (e) { return ''; } }
+function keptJSON(k){ try { return JSON.parse(kept(k) || 'null'); } catch (e) { return null; } }
+function addr(st){ return st.s === 'home' ? location.pathname + location.search : '#' + (st.s === 'form' ? 'step' + st.n : st.s); }
+function render(st){
+  if (st.s === 'signin' && TOKEN && SIGNIN) { st = { s: 'form', n: step || 1, d: st.d }; history.replaceState(st, '', addr(st)); }
+  if (st.s === 'done' && !$('doneRef').textContent) { st = { s: 'home', d: st.d }; history.replaceState(st, '', addr(st)); }
+  cur = st;
+  if (st.s === 'form') { show('form'); showStep(st.n); }
+  else if (st.s === 'signin') { var to = kept('drq_sto'); if (to) $('sTo').textContent = to; show('signin'); signStage(!!to); }
+  else show(st.s);
+}
+function push(st){ st.d = cur.d + 1; history.pushState(st, '', addr(st)); render(st); }
+function swap(st){ st.d = cur.d; history.replaceState(st, '', addr(st)); render(st); }
+function goHome(){ if (cur.d > 0) history.go(-cur.d); else swap({ s: 'home' }); }
+function homeThen(st){ if (cur.d > 0) { pending = st; history.go(-cur.d); } else push(st); }
+window.addEventListener('popstate', function(e){
+  var st = (e.state && e.state.s) ? e.state : { s: 'home', d: 0 };
+  if (pending) { var p = pending; pending = null; cur = st; push(p); return; }
+  if (sending) { history.pushState(cur, '', addr(cur)); return; }
+  render(st);
+});
+
+/* answers are saved as they are typed, so a refresh does not lose them */
+function draft(){
+  var f = $('fFile').files[0];
+  return { type: picked('typeOpts'), name: $('fName').value, des: $('fDes').value, org: $('fOrg').value, email: $('fEmail').value, phone: $('fPhone').value,
+    topic: picked('topicOpts'), req: $('fReq').value, level: picked('levelOpts'), period: $('fPeriod').value, brk: picked('breakOpts'),
+    brkOther: $('fBreakOther').value, fmt: picked('formatOpts'), date: $('fDate').value, use: $('fUse').value, pub: picked('pubOpts'),
+    confirm: $('fConfirm').checked, file: f ? f.name : lostFile };
+}
+function saveDraft(){ keep('drq_draft', JSON.stringify(draft())); }
+function tick(boxId, vals){
+  Array.prototype.forEach.call($(boxId).querySelectorAll('input'), function(i){ i.checked = (vals || []).indexOf(i.value) >= 0; i.closest('.opt').classList.toggle('on', i.checked); });
+}
+function restoreDraft(){
+  var d = keptJSON('drq_draft'); if (!d) return;
+  tick('typeOpts', d.type); tick('topicOpts', d.topic); tick('levelOpts', d.level); tick('breakOpts', d.brk); tick('formatOpts', d.fmt); tick('pubOpts', d.pub);
+  [['fName','name'],['fDes','des'],['fOrg','org'],['fEmail','email'],['fPhone','phone'],['fReq','req'],['fPeriod','period'],['fBreakOther','brkOther'],['fDate','date'],['fUse','use']]
+    .forEach(function(x){ $(x[0]).value = d[x[1]] || ''; });
+  $('fConfirm').checked = !!d.confirm; $('confirmOpt').classList.toggle('on', !!d.confirm);
+  if (d.file) { lostFile = d.file; $('fileLost').textContent = 'The page was reloaded. Please choose your supporting letter (' + d.file + ') again.'; $('fileLost').classList.remove('hide'); }
+}
+/* after a request is sent: keep who is asking (steps 1 and 2) for a next request, and clear the rest */
+function clearRequest(){
+  ['fReq','fPeriod','fBreakOther','fDate','fUse','fFile'].forEach(function(id){ $(id).value = ''; });
+  ['topicOpts','levelOpts','breakOpts','formatOpts','pubOpts'].forEach(function(b){ tick(b, []); });
+  $('fConfirm').checked = false; $('confirmOpt').classList.remove('on');
+  lostFile = ''; $('fileLost').classList.add('hide'); step = 1; saveDraft();
+}
+$('form').addEventListener('input', saveDraft);
+$('form').addEventListener('change', saveDraft);
+$('fFile').addEventListener('change', function(){ lostFile = ''; $('fileLost').classList.add('hide'); saveDraft(); });
+
+$('goMake').onclick = function(){ step = 1; if (SIGNIN && !TOKEN) push({ s: 'signin' }); else push({ s: 'form', n: 1 }); };
 $('btnCode').onclick = askCode; $('btnVerify').onclick = checkCode;
-$('btnAgain').onclick = function(){ signStage(false); };
-$('btnOut').onclick = function(){ setSession('', ''); $('fEmail').value = ''; };
-$('mineList').onclick = function(e){ var b = e.target.closest('button'); if (!b) return; $('tRef').value = b.dataset.ref; $('tCode').value = b.dataset.code; show('track'); doTrack(); };
-$('goTrack').onclick = $('doneTrack').onclick = function(){ show('track'); if (val('tRef') && val('tCode')) doTrack(); };
-$('doneHome').onclick = $('trackHome').onclick = $('signHome').onclick = function(){ show('home'); };
-$('btnBack').onclick = function(){ if (step === 1) show('home'); else showStep(step - 1); };
+$('btnAgain').onclick = function(){ keep('drq_sto', ''); signStage(false); };
+$('btnOut').onclick = function(){ setSession('', ''); keep('drq_sto', ''); $('fEmail').value = ''; saveDraft(); };
+$('mineList').onclick = function(e){ var b = e.target.closest('button'); if (!b) return; $('tRef').value = b.dataset.ref; $('tCode').value = b.dataset.code; push({ s: 'track' }); doTrack(); };
+$('goTrack').onclick = $('doneTrack').onclick = function(){ push({ s: 'track' }); if (val('tRef') && val('tCode')) doTrack(); };
+$('doneHome').onclick = $('trackHome').onclick = $('signHome').onclick = goHome;
+$('btnBack').onclick = function(){ if (cur.d > 0) history.back(); else if (step > 1) swap({ s: 'form', n: step - 1 }); else swap({ s: 'home' }); };
 $('btnNext').onclick = function(){
   var problem = check(step);
   if (problem) return fail('formErr', problem);
-  if (step < LAST) showStep(step + 1); else send();
+  if (step < LAST) push({ s: 'form', n: step + 1 }); else send();
 };
 $('btnTrack').onclick = doTrack;
 $('btnReply').onclick = doReply;
 
 drawAll();
+restoreDraft();
+(function(){
+  var done = keptJSON('drq_done'), trk = keptJSON('drq_trk');
+  if (done) { $('doneRef').textContent = done.ref; $('doneCode').textContent = done.code; }
+  if (trk) { $('tRef').value = trk.ref; $('tCode').value = trk.code; }
+  var st = history.state && history.state.s ? history.state : null;
+  if (!st || !SCRIPT_URL) { cur = { s: 'home', d: 0 }; history.replaceState(cur, '', addr(cur)); return; }
+  if (st.s === 'form' && SIGNIN && !TOKEN) st = { s: 'signin', d: st.d };
+  history.replaceState(st, '', addr(st)); render(st);
+  if (st.s === 'track' && val('tRef') && val('tCode')) doTrack();
+})();
 if (!SCRIPT_URL) { $('setup').style.display = 'block'; $('goMake').disabled = true; $('goTrack').disabled = true; }
 else get('api=lists').then(function(r){
   if (!r || !r.ok) return;
